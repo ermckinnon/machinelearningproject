@@ -1,0 +1,180 @@
+---
+title: "Machine Learning Project"
+author: "Ewen McKinnon"
+date: "Sunday, May 15, 2016"
+output: word_document
+---
+# Background
+This project uses data from accelerometers on the belt, forearm, arm, and dumbbell of 6 participants in a physical exercise trial. Participants were asked to perform dumbbell lifts correctly and incorrectly in 5 different ways. The aim of this report is to see if we can accurately classify incorrect and correct performance from the accelerometer data - and then to run the final classifier on a set of 20 test questions.
+
+# Methodology
+Given a very clear analytical question my methodological approach for this project was to:  
+* load and clean the data to reduce the data to useful features only  
+* split the data into training and testing datasets  
+* explore the potential features to determine if any pre-processing is required  
+* run some candidate classifiers - classification tree, random forest and gradient boosting  
+* perform cross-validation on test sets  
+* explore the possibility of blending classifiers to improve performance  
+* select a final classifier and run it on the project test questions    
+
+# Data Cleansing and Preparation
+```{r load_data, echo=FALSE,message=FALSE,warning=FALSE}
+library(ggplot2)
+library(reshape2)
+library(rpart)
+library(rattle)
+library(rpart.plot)
+library(ElemStatLearn)
+library(caret)
+library(gbm)
+library(glmnet)
+library(elasticnet)
+library(randomForest)
+
+building <- read.csv("C:/R Programming Course/Machine Learning/pml-training.csv", stringsAsFactors=FALSE)
+validation <- read.csv("C:/R Programming Course/Machine Learning/pml-testing.csv", stringsAsFactors=FALSE)
+
+```
+
+The data can be downloaded from http://groupware.les.inf.puc-rio.br/har. In the training data there are `r ncol(building) -1` variables with an additional single classification variable 'classe'. However many of the variables in the training data are dominated by missing data. Furthermore, these variables are entirely missing in the final test question dataset and they needed to be removed. In addition, there are time stamp variables which intuitively should not contribute as features within the classifier and I have removed these too. Annex A provides a summary of the 54 useful variables I retained for classification analysis.
+
+```{r clean_data, echo=FALSE,message=FALSE,warning=FALSE}
+
+#remove variables which are incomplete and not part of test questions or not predictors
+
+building <- building[,-c(1,3:6,12:36,50:59,69:83,87:101,103:112,125:139,141:150)]
+validation <- validation[,-c(1,3:6,12:36,50:59,69:83,87:101,103:112,125:139,141:150)]
+
+#convert to factors
+building$classe <- as.factor(building$classe)
+#building$new_window <- as.factor(building$new_window)
+#validation$new_window <- as.factor(validation$new_window)
+building$user_name <- as.factor(building$user_name)
+validation$user_name <- as.factor(validation$user_name)
+
+
+```
+
+
+```{r partition, echo=FALSE,message=FALSE,warning=FALSE}
+
+inTrain = createDataPartition(building$classe, p = 3/4)[[1]]
+training = building[ inTrain,]
+testing = building[-inTrain,]
+
+```
+
+I have split the data into training and testing dataset on a 75:25 basis. So in total there are `r nrow(training)` observations in the training dataset and `r nrow(testing)` observations in the testing dataset for cross-validation. 
+
+# Exploratory Analysis
+Exploratory analysis highlights non-normal distributions among the potential classifier features. The charts below illustrate a few histograms of features and show skewed and bi-modal distributions. These suggest pre-processing using centering and scaling might help with some classifications algorithms - particularly generalised linear regression modelling.
+
+```{r graphs,echo=FALSE,message=FALSE,warning=FALSE}
+library(ggplot2)
+library(Rmisc)
+p1 <- ggplot(data=training, aes(training[,c(3)])) + geom_histogram() + 
+  labs(title="Roll Belt") +
+  labs(x="roll_belt", y="Count")
+
+p2 <- ggplot(data=training, aes(training[,c(4)])) + geom_histogram() + 
+  labs(title="Pitch Belt") +
+  labs(x="pitch_belt", y="Count")
+
+p3 <- ggplot(data=training, aes(training[,c(5)])) + geom_histogram() + 
+  labs(title="Yaw Belt") +
+  labs(x="yaw_belt", y="Count")
+
+p4 <- ggplot(data=training, aes(training[,c(6)])) + geom_histogram() + 
+  labs(title="Accelaration Belt") +
+  labs(x="total_accel_belt", y="Count")
+multiplot(p1, p2, p3, p4, cols=2)
+
+```
+
+
+# Development of Classifiers and Cross-validation Results
+The classification variable consists of a factor variable with 5 levels - in other words one correct form of exercise and four incorrect. In practice this means binomial logistic regression is not possible because there are more than two classification possibilities. I therefore ran three types of models - classification tree, boosting and random forest, with two forms of pre-processing - centre & scaling and Principle Components Analysis.
+
+The two best models which emerged from this analysis were Random Forest and Boosting, without any pre-processing. Centre and scaling, and PCA pre-processing in almost all cases produced poorer classification results. Classification tree algorithms performed particularly poorly and do not appear suited to this dataset.
+
+```{r runclassifiers1, echo=FALSE,warning=FALSE,message=FALSE,cache=TRUE}
+
+#Random Forest 
+rformodel <- train(training$classe ~ ., data=training , method="rf")
+                                                 
+#Boosting 
+gbmodel <- train(training$classe ~ ., data=training , method="gbm",verbose=FALSE)                  
+                    
+```
+
+
+```{r Combi1, echo=FALSE,message=FALSE,warning=FALSE }
+rforpredictiont <- predict(rformodel,training)
+rforprediction <- predict(rformodel,testing)
+gbpredictiont <- predict(gbmodel,training)
+gbprediction <- predict(gbmodel,testing)
+
+forerror_out = 100 - ((sum (testing$classe == rforprediction)/ length(rforprediction))*100)
+forerror_in = 100 - ((sum (training$classe == rforpredictiont)/ length(rforpredictiont))*100)
+gmberror1 = 100 - ((sum (testing$classe == gbprediction)/ length(gbprediction))*100)
+gmberror2 = 100 - ((sum (training$classe == gbpredictiont)/ length(gbpredictiont))*100)
+
+common = (sum(gbprediction==rforprediction)/length(gbprediction))*100
+commont = (sum(gbpredictiont==rforpredictiont)/length(gbpredictiont))*100
+```
+
+Confusion Matrices for the two best models are presented in Annexes B and C. However the headline performance and error rates are as follows:  
+
+* Random Forest in sample accuracy `r round(100-forerror_in,2)`% with error rate `r round(forerror_in,2)`%  
+* Random Forest out of sample accuracy `r round(100-forerror_out,2)`% with error rate `r round(forerror_out,2)`%  
+* Boosting in sample accuracy `r round(100-gmberror2,2)`% with error rate `r round(gmberror2,2)`%  
+* Boosting out of sample sample accuracy `r round(100-gmberror1,2)`% with error rate `r round(gmberror1,2)`%   
+
+So both classifiers perform well but with the the Random Forest classifier performing marginally better. 
+
+## Discussion on Combinational/ Ensemble Classification
+There is clearly very little room for improvement given the high accuracy of the classifiers however it is possible to construct a majority voting combination of the two classifiers. On the training data set the two classifiers agree with each other on `r round(commont,2)`% of observations. On the testing dataset they agree on `r round(common,2)`% of observations. So some dissagrement suggests there is a potential for a very small improvement using a combination classifier. Such small improvements in accuracy might help with thousands of classifications, however over a small set of test questions there will be little to gain from developing a combination classifier - in fact both classifiers give exactly the same results on the final test questions. Furthermore given the very high processing times for the two classifiers (both took take 3hrs to run on my computer) I would recommend using the random forest classifier which its slightly higher accuracy and almost halving the computation time that would be associated with tuning a combinational classifier.
+
+# Final Classifier Results
+The table below  provides the final results against the 20 quiz questions using the random forest classifier which has a measured out of sample accuracy of `r round(100-forerror_out,2)`% and out of sample error rate of `r round(forerror_out,2)`%.
+
+```{r final results, echo=FALSE,warning=FALSE}
+rforpredQuestions <- predict(rformodel,validation)
+gbpredQuestions <- predict(gbmodel,validation)
+
+results <- data.frame(problem_id = validation[,55],rforrest_prediction = rforpredQuestions, boosting = gbpredQuestions )
+results[,c(1,2)]
+
+```
+
+# Annex A Summary of variables used in classification training set
+```{r varsummary, echo=FALSE,warning=FALSE}
+str(training)
+```
+
+# Annex B Confusion Matrices for Random Forest Classifier
+## Insample Results
+```{r Random_Forest1, echo=FALSE,warning=FALSE,message=FALSE}
+rforpredictiont <- predict(rformodel,training)
+confusionMatrix(training$classe ,rforpredictiont)
+
+```
+## Out of Sample Results
+```{r Random_Forest2, echo=FALSE,warning=FALSE,message=FALSE}
+rforprediction <- predict(rformodel,testing)
+confusionMatrix(testing$classe ,rforprediction)
+
+```
+# Annex C Confusion Matrices for Boosting Classifier
+## Insample Results
+```{r Boosting1, echo=FALSE,warning=FALSE,message=FALSE}
+gbpredictiont <- predict(gbmodel,training)
+confusionMatrix(training$classe ,gbpredictiont)
+
+```
+## Out of Sample Results
+```{r Boosting2, echo=FALSE,warning=FALSE,message=FALSE}
+gbprediction <- predict(gbmodel,testing)
+confusionMatrix(testing$classe ,gbprediction)
+
+```
